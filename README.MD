@@ -151,17 +151,3 @@ tavily-fde-assignment/
 ├── .env                    # API keys (populate this)
 └── marketing_assets/       # Store generated poster images
 ```
-
------
-
-## Notes
-
-  - Generated posters are saved in the `marketing_assets/` directory, which the service creates automatically.
-  - **API Credit Usage**: Each `/partnership-campaign` request uses approximately 4 Tavily API credits (2 for brand search, 2 for event search) plus OpenAI and Gemini API calls.
-
------
-
-## Troubleshooting
-
-  - **API Rate Limits**: Check quotas for Gemini, OpenAI, and monitor Tavily credit usage at [app.tavily.com](https://app.tavily.com).
-  - **Missing Event Details**: Ensure your Tavily API key has sufficient credits and the search is finding relevant, detailed events.
