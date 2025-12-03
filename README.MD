@@ -25,11 +25,11 @@ Each poster includes brand-specific visual elements, city landmarks, event detai
 
 ---
 
-## 🚀 Technical and Business Statement
+## Technical and Business Statement
 
-Our approach is a **multi-agent, chained workflow** built on a FastAPI backend, designed for rapid, data-driven campaign ideation.
+My approach is a **multi-agent, chained workflow** built on a FastAPI backend, designed for rapid, data-driven campaign ideation.
 
-The core technical innovation is the implementation of a **proactive, LLM-guided domain exclusion strategy**. We use **OpenAI** to identify and exclude official brand domains from **Tavily's** web search, forcing the agent to focus exclusively on **third-party sources**. This guarantees the discovery of **untapped, external partnership opportunities**, which is a critical business value.
+The core technical innovation is the implementation of a **proactive, LLM-guided domain exclusion strategy**. I use **OpenAI** to identify and exclude official brand domains from **Tavily's** web search, forcing the agent to focus exclusively on **third-party sources**. This guarantees the discovery of **untapped, external partnership opportunities**, which is a critical business value.
 
 The process automates the campaign cycle:
 1.  **Research & Exclusion**: Tavily performs advanced searches using `search_depth="advanced"` and **full page content extraction** (`include_raw_content="markdown"`) to gather deep data on brand positioning and local events.
