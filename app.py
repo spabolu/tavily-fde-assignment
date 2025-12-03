@@ -12,7 +12,6 @@ from google.genai import types
 from langchain_openai import ChatOpenAI
 from langchain_tavily import TavilySearch
 from pydantic import BaseModel
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 load_dotenv()
 
@@ -104,11 +103,6 @@ class MarketingBriefBuilder:
     def __init__(self, llm: ChatOpenAI):
         self.llm = llm
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    def _invoke_llm(self, prompt: str):
-        """Invoke LLM with retry logic."""
-        return self.llm.invoke(prompt)
-
     def build_brief(
         self,
         brand: str,
@@ -141,7 +135,7 @@ Return a JSON object with keys:
 IMPORTANT: Extract specific dates, times, and locations from the event content. If details are missing, indicate "TBD" or "Check website".
 No prose outside the JSON.
 """
-        message = self._invoke_llm(prompt)
+        message = self.llm.invoke(prompt)
         try:
             return json.loads(message.content)
         except json.JSONDecodeError as exc:
@@ -169,9 +163,8 @@ class GeminiImageGenerator:
             image_config=self.image_config,
         )
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def generate_image_bytes(self, prompt: str) -> bytes:
-        """Generate image bytes from text prompt with retry logic."""
+        """Generate image bytes from text prompt."""
         response = self.client.models.generate_content(
             model=self.model_name,
             contents=[prompt],
@@ -198,12 +191,6 @@ class GeminiImageGenerator:
         return str(path)
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-def _invoke_llm_for_domains(llm: ChatOpenAI, prompt: str):
-    """Invoke LLM for domain extraction with retry logic."""
-    return llm.invoke(prompt)
-
-
 def get_brand_domains(brand: str, llm: ChatOpenAI) -> List[str]:
     """Get top 5 brand domains using LLM, with fallback heuristic."""
     prompt = f"""What are the top 5 most important official website domains for the brand "{brand}"?
@@ -218,7 +205,7 @@ Example format for "Nike":
 Return only the JSON array, no other text:"""
 
     try:
-        response = _invoke_llm_for_domains(llm, prompt)
+        response = llm.invoke(prompt)
         content = response.content.strip()
         
         if content.startswith("```"):
@@ -264,12 +251,6 @@ def ensure_env(var_name: str) -> str:
     return value
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-def _invoke_tavily_search(search: TavilySearch, query: str):
-    """Invoke Tavily search with retry logic."""
-    return search.invoke(query)
-
-
 def build_marketing_assets(request: MarketingRequest) -> Dict[str, Any]:
     """Build marketing campaign assets: research, brief, and poster."""
     tavily_api_key = ensure_env("TAVILY_API_KEY")
@@ -290,8 +271,7 @@ def build_marketing_assets(request: MarketingRequest) -> Dict[str, Any]:
         include_raw_content="markdown",
         chunks_per_source=3,
     )
-    brand_result = _invoke_tavily_search(
-        brand_search,
+    brand_result = brand_search.invoke(
         f"{request.brand} brand voice, marketing positioning, product heroes, logo usage, partnership history"
     )
     brand_research = {
@@ -315,8 +295,7 @@ def build_marketing_assets(request: MarketingRequest) -> Dict[str, Any]:
         events_params["country"] = country
     
     events_search = TavilySearch(**events_params)
-    events_result = _invoke_tavily_search(
-        events_search,
+    events_result = events_search.invoke(
         f"upcoming events in {request.city} with dates, times, and locations suitable for {request.brand} partnerships or collaborations. Include specific event details like event date, start time, venue address, and location."
     )
     events_raw = events_result.get("results", []) if isinstance(events_result, dict) else []

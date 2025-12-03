@@ -48,7 +48,6 @@ This automation slashes the campaign cycle from days to minutes, translating dir
 -   **LLM-Powered Domain Exclusion**: Uses OpenAI to dynamically identify and filter brand domains from search.
 -   **Marketing Brief Generation**: Creates structured briefs with partnership angles and precise visual prompts.
 -   **Poster Generation**: Generates high-quality partnership campaign posters using Google Gemini image generation, ensuring all essential event details are visually present.
--   **Resilient API Calls**: Automatic retry logic with exponential backoff for all API calls (Tavily, OpenAI, Gemini) to handle transient failures and rate limits gracefully.
 
 ---
 
@@ -140,7 +139,6 @@ Generates a partnership marketing campaign poster for a brand in a target city.
 - **`langchain-tavily`**: Tavily integration for web search and event discovery (Tavily Search)
 - **`langchain-openai`**: OpenAI integration for LLM-powered operations
 - **google-genai**: Google Gemini integration for image generation
-- **tenacity**: Retry logic with exponential backoff for resilient API calls
 - **LangGraph**: For the web research agent workflow
 
 ## Project Structure
