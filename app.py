@@ -77,7 +77,15 @@ class TavilyClient:
         self.api_key = api_key
         self.search_url = "https://api.tavily.com/search"
 
-    def search(self, query: str, max_results: int = 5) -> Dict[str, Any]:
+    def search(self, query: str, max_results: int = 5, exclude_domains: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Search using Tavily API.
+        
+        Args:
+            query: Search query string
+            max_results: Maximum number of results to return
+            exclude_domains: List of domains to exclude from results (e.g., ['nike.com', 'www.nike.com'])
+        """
         payload = {
             "api_key": self.api_key,
             "query": query,
@@ -85,6 +93,11 @@ class TavilyClient:
             "max_results": max_results,
             "include_answer": True,
         }
+        
+        # Add exclude_domains if provided
+        if exclude_domains:
+            payload["exclude_domains"] = exclude_domains
+        
         response = requests.post(self.search_url, json=payload, timeout=30)
         response.raise_for_status()
         data = response.json()
@@ -197,6 +210,72 @@ class QueryRequest(BaseModel):
     thread_id: str = None
 
 
+def get_brand_domains(brand: str, llm: ChatOpenAI) -> List[str]:
+    """
+    Use LLM to get the top 5 actual domain names for a brand to exclude from search results.
+    Returns a list of domain patterns to exclude (e.g., ['nike.com', 'www.nike.com']).
+    """
+    prompt = f"""What are the top 5 most important official website domains for the brand "{brand}"?
+    
+Return ONLY a JSON array of domain strings (without www prefix, just the base domains).
+Include the main corporate website and any major brand-specific domains.
+Do not include social media domains or third-party sites.
+
+Example format for "Nike":
+["nike.com", "nike.net", "nike.org"]
+
+Return only the JSON array, no other text:"""
+
+    try:
+        response = llm.invoke(prompt)
+        content = response.content.strip()
+        
+        # Remove markdown code blocks if present
+        if content.startswith("```"):
+            lines = content.split("\n")
+            content = "\n".join(lines[1:-1]) if len(lines) > 2 else content
+        
+        # Parse JSON array
+        domains = json.loads(content)
+        
+        # Validate it's a list of strings
+        if not isinstance(domains, list):
+            raise ValueError("LLM did not return a list")
+        
+        # Limit to top 5 and add www variants
+        domains = domains[:5]
+        
+        # Add www variants for each domain
+        result = []
+        for domain in domains:
+            domain = domain.strip().lower()
+            # Remove www if present
+            if domain.startswith("www."):
+                domain = domain[4:]
+            result.append(domain)
+            result.append(f"www.{domain}")
+        
+        return result
+    except (json.JSONDecodeError, ValueError, AttributeError):
+        # Fallback: use simple heuristic if LLM fails
+        normalized = brand.lower().strip()
+        for suffix in [' inc', ' inc.', ' llc', ' ltd', ' ltd.', ' corp', ' corp.', ' company', ' co', ' co.']:
+            if normalized.endswith(suffix):
+                normalized = normalized[:-len(suffix)].strip()
+        
+        if ' ' in normalized:
+            base_domains = [normalized.replace(' ', '-'), normalized.replace(' ', '')]
+        else:
+            base_domains = [normalized]
+        
+        result = []
+        for base in base_domains[:2]:  # Limit to 2 variants
+            result.append(f"{base}.com")
+            result.append(f"www.{base}.com")
+        
+        return result[:10]  # Return up to 10 domains
+
+
 def ensure_env(var_name: str) -> str:
     value = os.getenv(var_name)
     if not value:
@@ -209,18 +288,26 @@ def build_marketing_assets(request: MarketingRequest) -> Dict[str, Any]:
     openai_api_key = ensure_env("OPENAI_API_KEY")
     gemini_api_key = ensure_env("GEMINI_API_KEY")
 
+    # Initialize LLM for domain extraction
+    llm = ChatOpenAI(model="gpt-5-mini-2025-08-07", api_key=openai_api_key)
+    
+    # Get brand domains to exclude from search results using LLM
+    brand_domains = get_brand_domains(request.brand, llm)
+    
     tavily_client = TavilyClient(api_key=tavily_api_key)
     brand_research = tavily_client.search(
         query=f"{request.brand} brand voice, marketing positioning, product heroes, logo usage, partnership history",
         max_results=6,
+        exclude_domains=brand_domains,
     )
     events_raw = tavily_client.search(
         query=f"upcoming events in {request.city} suitable for {request.brand} partnerships or collaborations",
         max_results=max(request.num_events * 2, 6),
+        exclude_domains=brand_domains,
     )
     events = tavily_client.normalize_results(events_raw, limit=request.num_events)
 
-    llm = ChatOpenAI(model="gpt-5-mini-2025-08-07", api_key=openai_api_key)
+    # Reuse the same LLM instance for brief building
     brief_builder = MarketingBriefBuilder(llm)
     brief = brief_builder.build_brief(
         brand=request.brand,
