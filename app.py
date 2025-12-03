@@ -111,11 +111,14 @@ class TavilyClient:
     def normalize_results(search_payload: Dict[str, Any], limit: int) -> List[Dict[str, Any]]:
         items = []
         for entry in search_payload.get("results", []):
+            # Extract full content to preserve event details
+            content = entry.get("content") or entry.get("snippet") or ""
             items.append(
                 {
                     "title": entry.get("title"),
                     "url": entry.get("url"),
-                    "summary": entry.get("content") or entry.get("snippet"),
+                    "summary": content,
+                    "full_content": content,  # Keep full content for LLM to extract details
                 }
             )
             if len(items) >= limit:
@@ -145,9 +148,18 @@ Visual style: {visual_style}
 
 Return a JSON object with keys:
 - brand_summary: 2 sentences on voice, audience, and iconic product to feature.
-- events: list of events (title, hook, partnership_angle, url) limited to {len(events)} items.
-- visual_prompt: <=120 words prompt for an image generator, must mention the brand logo placement, the iconic product, the city atmosphere, and blend event themes.
-- overlay_copy: short copy (headline + CTA) to render on the poster.
+- events: list of events limited to {len(events)} items. Each event must include:
+  - title: event name
+  - hook: compelling one-liner about the event
+  - partnership_angle: why this brand-event pairing works
+  - url: event URL
+  - date: specific event date (extract from event content, format as "Month Day, Year" or "MM/DD/YYYY")
+  - time: event start time if available (format as "HH:MM AM/PM" or "HH:MM")
+  - location: specific venue name and address if available, otherwise neighborhood/area
+- visual_prompt: <=120 words prompt for an image generator, must mention the brand logo placement, the iconic product, the city atmosphere, event dates/times/locations, and blend event themes.
+- overlay_copy: short copy (headline + CTA) to render on the poster. Include event dates and locations prominently.
+
+IMPORTANT: Extract specific dates, times, and locations from the event content. If details are missing, indicate "TBD" or "Check website".
 No prose outside the JSON.
 """
         message = self.llm.invoke(prompt)
@@ -301,7 +313,7 @@ def build_marketing_assets(request: MarketingRequest) -> Dict[str, Any]:
         exclude_domains=brand_domains,
     )
     events_raw = tavily_client.search(
-        query=f"upcoming events in {request.city} suitable for {request.brand} partnerships or collaborations",
+        query=f"upcoming events in {request.city} with dates, times, and locations suitable for {request.brand} partnerships or collaborations. Include specific event details like event date, start time, venue address, and location.",
         max_results=max(request.num_events * 2, 6),
         exclude_domains=brand_domains,
     )
@@ -317,10 +329,27 @@ def build_marketing_assets(request: MarketingRequest) -> Dict[str, Any]:
         visual_style=request.visual_style,
     )
 
+    # Build image prompt with event details
+    events_info = ""
+    if brief.get("events"):
+        event_details = []
+        for event in brief.get("events", []):
+            detail_parts = [event.get("title", "")]
+            if event.get("date"):
+                detail_parts.append(f"Date: {event['date']}")
+            if event.get("time"):
+                detail_parts.append(f"Time: {event['time']}")
+            if event.get("location"):
+                detail_parts.append(f"Location: {event['location']}")
+            event_details.append(" | ".join(detail_parts))
+        events_info = "\nEvent Details:\n" + "\n".join(event_details)
+    
     image_prompt = (
         f"{brief.get('visual_prompt', '')}\n"
         f"Include {request.brand} logo and signature product prominently. "
-        f"Blend {request.city} landmarks. Text overlay: {brief.get('overlay_copy', '')}."
+        f"Blend {request.city} landmarks. "
+        f"{events_info}\n"
+        f"Text overlay: {brief.get('overlay_copy', '')}."
     )
     gemini = GeminiImageGenerator(api_key=gemini_api_key)
     image_bytes = gemini.generate_image_bytes(image_prompt)
