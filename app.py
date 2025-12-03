@@ -111,6 +111,7 @@ class MarketingBriefBuilder:
         events: List[Dict[str, Any]],
         visual_style: str,
     ) -> Dict[str, Any]:
+        print(f"[debug] Building marketing brief for brand='{brand}' in city='{city}' with {len(events)} events")
         prompt = f"""
 You are a partnerships marketing strategist. Create a concise JSON brief for a poster that pairs the brand with city events.
 Brand: {brand}
@@ -136,6 +137,7 @@ IMPORTANT: Extract specific dates, times, and locations from the event content. 
 No prose outside the JSON.
 """
         message = self.llm.invoke(prompt)
+        print("[debug] LLM returned brief content")
         try:
             return json.loads(message.content)
         except json.JSONDecodeError as exc:
@@ -148,7 +150,7 @@ class GeminiImageGenerator:
     def __init__(
         self,
         api_key: str,
-        model_name: str = "gemini-3-pro-image-preview",
+        model_name: str = "gemini-3-pro-image-preview", # nano banana pro
         aspect_ratio: str = "16:9",
         image_size: str = "1K",
     ):
@@ -165,6 +167,7 @@ class GeminiImageGenerator:
 
     def generate_image_bytes(self, prompt: str) -> bytes:
         """Generate image bytes from text prompt."""
+        print("[debug] Generating image with Gemini")
         response = self.client.models.generate_content(
             model=self.model_name,
             contents=[prompt],
@@ -199,12 +202,13 @@ Return ONLY a JSON array of domain strings (without www prefix, just the base do
 Include the main corporate website and any major brand-specific domains.
 Do not include social media domains or third-party sites.
 
-Example format for "Nike":
+Example format for "Nike" assuming the brand has the following domains:
 ["nike.com", "nike.net", "nike.org"]
 
 Return only the JSON array, no other text:"""
 
     try:
+        print(f"[debug] Requesting brand domains for '{brand}' from LLM")
         response = llm.invoke(prompt)
         content = response.content.strip()
         
@@ -224,9 +228,10 @@ Return only the JSON array, no other text:"""
                 domain = domain[4:]
             result.append(domain)
             result.append(f"www.{domain}")
-        
+        print(f"[debug] LLM provided domains: {result}")
         return result
     except (json.JSONDecodeError, ValueError, AttributeError):
+        print(f"[debug] Falling back to heuristic domain generation for '{brand}'")
         # Fallback to simple heuristic
         normalized = brand.lower().strip()
         for suffix in [' inc', ' inc.', ' llc', ' ltd', ' ltd.', ' corp', ' corp.', ' company', ' co', ' co.']:
@@ -248,18 +253,22 @@ def ensure_env(var_name: str) -> str:
     value = os.getenv(var_name)
     if not value:
         raise HTTPException(status_code=500, detail=f"{var_name} not set")
+    print(f"[debug] Loaded environment variable: {var_name}")
     return value
 
 
 def build_marketing_assets(request: MarketingRequest) -> Dict[str, Any]:
     """Build marketing campaign assets: research, brief, and poster."""
+    print(f"[debug] Starting build_marketing_assets for brand='{request.brand}', city='{request.city}'")
     tavily_api_key = ensure_env("TAVILY_API_KEY")
     openai_api_key = ensure_env("OPENAI_API_KEY")
     gemini_api_key = ensure_env("GEMINI_API_KEY")
 
     llm = ChatOpenAI(model="gpt-5-mini-2025-08-07", api_key=openai_api_key)
     brand_domains = get_brand_domains(request.brand, llm)
+    print(f"[debug] Brand domains determined: {brand_domains}")
     country = get_country_from_city(request.city)
+    print(f"[debug] Country derived from city '{request.city}': {country or 'not found'}")
     
     # Brand research search
     brand_search = TavilySearch(
@@ -274,6 +283,7 @@ def build_marketing_assets(request: MarketingRequest) -> Dict[str, Any]:
     brand_result = brand_search.invoke(
         f"{request.brand} brand voice, marketing positioning, product heroes, logo usage, partnership history"
     )
+    print(f"[debug] Brand research results fetched: {len(brand_result.get('results', [])) if isinstance(brand_result, dict) else 0} items")
     brand_research = {
         "query": f"{request.brand} brand voice, marketing positioning, product heroes, logo usage, partnership history",
         "results": brand_result.get("results", []) if isinstance(brand_result, dict) else [],
@@ -300,6 +310,7 @@ def build_marketing_assets(request: MarketingRequest) -> Dict[str, Any]:
     )
     events_raw = events_result.get("results", []) if isinstance(events_result, dict) else []
     events = normalize_tavily_results(events_raw, limit=request.num_events)
+    print(f"[debug] Events gathered: requested {request.num_events}, normalized {len(events)}")
 
     # Generate brief
     brief_builder = MarketingBriefBuilder(llm)
@@ -310,6 +321,7 @@ def build_marketing_assets(request: MarketingRequest) -> Dict[str, Any]:
         events=events,
         visual_style=request.visual_style,
     )
+    print(f"[debug] Brief generated with {len(brief.get('events', [])) if brief.get('events') else 0} events")
 
     # Build image prompt with event details
     events_info = ""
@@ -333,11 +345,13 @@ def build_marketing_assets(request: MarketingRequest) -> Dict[str, Any]:
         f"{events_info}\n"
         f"Text overlay: {brief.get('overlay_copy', '')}."
     )
-    
+    print("[debug] Image prompt prepared")
+
     # Generate and save poster
     gemini = GeminiImageGenerator(api_key=gemini_api_key)
     image_bytes = gemini.generate_image_bytes(image_prompt)
     poster_path = gemini.save_image(image_bytes, brand=request.brand, city=request.city)
+    print(f"[debug] Poster saved to {poster_path}")
 
     return {
         "brand": request.brand,
