@@ -1,4 +1,5 @@
 import os
+import uuid
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -52,8 +53,12 @@ class WebAgent:
 
 app = FastAPI(title="Web Agent API")
 
+# Global memory
+memory = MemorySaver()
+
 class QueryRequest(BaseModel):
     query: str
+    thread_id: str = None
 
 @app.post("/run")
 async def run_agent(request: QueryRequest):
@@ -70,10 +75,13 @@ async def run_agent(request: QueryRequest):
             raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set")
         
         # Use the llm of your choice
-        llm = ChatOpenAI(model="gpt-5-mini", api_key=openai_api_key)
+        llm = ChatOpenAI(model="gpt-5-mini-2025-08-07", api_key=openai_api_key)
+        
+        # Handle thread_id
+        thread_id = request.thread_id or str(uuid.uuid4())
         
         # Build the graph
-        agent = WebAgent()
+        agent = WebAgent(checkpointer=memory)
         graph = agent.build_graph(
             api_key=tavily_api_key,
             llm=llm,
@@ -81,12 +89,13 @@ async def run_agent(request: QueryRequest):
         )
         
         # Execute the graph
-        result = graph.invoke({"messages": [("user", request.query)]})
+        config = {"configurable": {"thread_id": thread_id}}
+        result = graph.invoke({"messages": [("user", request.query)]}, config=config)
         
         # Extract the final message
         output = result["messages"][-1].content
         
-        return {"query": request.query, "output": output}
+        return {"query": request.query, "output": output, "thread_id": thread_id}
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

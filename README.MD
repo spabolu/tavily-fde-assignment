@@ -44,3 +44,16 @@ curl -X POST "http://localhost:8000/run" \
   -H "Content-Type: application/json" \
   -d '{"query": "What are the latest developments in AI?"}'
 ```
+
+To use the memory/persistence feature, include a `thread_id` in your request. Subsequent requests with the same `thread_id` will share the conversation history.
+
+```bash
+curl -X POST "http://localhost:8000/run" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "My name is Alice.", "thread_id": "1"}'
+
+# Later...
+curl -X POST "http://localhost:8000/run" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What is my name?", "thread_id": "1"}'
+```
