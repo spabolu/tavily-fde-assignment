@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import google.genai as genai
-import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from google.genai import types
@@ -72,58 +71,104 @@ class MarketingRequest(BaseModel):
     thread_id: Optional[str] = None
 
 
-class TavilyClient:
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-        self.search_url = "https://api.tavily.com/search"
+def get_country_from_city(city: str) -> Optional[str]:
+    """
+    Map city name to country for Tavily's country parameter.
+    Returns country name in lowercase format expected by Tavily API.
+    """
+    # Common city-to-country mappings for major cities
+    city_country_map = {
+        # United States
+        "new york": "united states",
+        "new york city": "united states",
+        "nyc": "united states",
+        "los angeles": "united states",
+        "chicago": "united states",
+        "san francisco": "united states",
+        "boston": "united states",
+        "miami": "united states",
+        "seattle": "united states",
+        "austin": "united states",
+        "atlanta": "united states",
+        "dallas": "united states",
+        "houston": "united states",
+        "philadelphia": "united states",
+        "washington": "united states",
+        "washington dc": "united states",
+        # United Kingdom
+        "london": "united kingdom",
+        "manchester": "united kingdom",
+        "birmingham": "united kingdom",
+        "edinburgh": "united kingdom",
+        # Canada
+        "toronto": "canada",
+        "vancouver": "canada",
+        "montreal": "canada",
+        # Australia
+        "sydney": "australia",
+        "melbourne": "australia",
+        # Other major cities
+        "paris": "france",
+        "berlin": "germany",
+        "madrid": "spain",
+        "rome": "italy",
+        "amsterdam": "netherlands",
+        "tokyo": "japan",
+        "singapore": "singapore",
+        "hong kong": "china",
+        "dubai": "united arab emirates",
+        "mumbai": "india",
+        "delhi": "india",
+        "bangalore": "india",
+        "sao paulo": "brazil",
+        "rio de janeiro": "brazil",
+        "mexico city": "mexico",
+    }
+    
+    city_lower = city.lower().strip()
+    # Try exact match first
+    if city_lower in city_country_map:
+        return city_country_map[city_lower]
+    
+    # Try partial match (e.g., "New York" contains "new york")
+    for city_key, country in city_country_map.items():
+        if city_key in city_lower or city_lower in city_key:
+            return country
+    
+    return None  # Return None if no match found
 
-    def search(self, query: str, max_results: int = 5, exclude_domains: Optional[List[str]] = None) -> Dict[str, Any]:
-        """
-        Search using Tavily API.
-        
-        Args:
-            query: Search query string
-            max_results: Maximum number of results to return
-            exclude_domains: List of domains to exclude from results (e.g., ['nike.com', 'www.nike.com'])
-        """
-        payload = {
-            "api_key": self.api_key,
-            "query": query,
-            "search_depth": "advanced",
-            "max_results": max_results,
-            "include_answer": True,
-        }
-        
-        # Add exclude_domains if provided
-        if exclude_domains:
-            payload["exclude_domains"] = exclude_domains
-        
-        response = requests.post(self.search_url, json=payload, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        return {
-            "query": query,
-            "results": data.get("results", []),
-            "answer": data.get("answer"),
-        }
 
-    @staticmethod
-    def normalize_results(search_payload: Dict[str, Any], limit: int) -> List[Dict[str, Any]]:
-        items = []
-        for entry in search_payload.get("results", []):
-            # Extract full content to preserve event details
-            content = entry.get("content") or entry.get("snippet") or ""
-            items.append(
-                {
-                    "title": entry.get("title"),
-                    "url": entry.get("url"),
-                    "summary": content,
-                    "full_content": content,  # Keep full content for LLM to extract details
-                }
-            )
-            if len(items) >= limit:
-                break
-        return items
+def normalize_tavily_results(results: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+    """
+    Normalize Tavily search results to a consistent format.
+    Prioritizes raw_content if available for better detail extraction.
+    
+    Args:
+        results: List of Tavily result dictionaries
+        limit: Maximum number of results to return
+        
+    Returns:
+        List of normalized event dictionaries
+    """
+    items = []
+    for entry in results[:limit]:
+        # Prioritize raw_content for full page content, fallback to content/snippet
+        raw_content = entry.get("raw_content", "")
+        content = entry.get("content") or entry.get("snippet") or ""
+        
+        # Use raw_content if available (more detailed), otherwise use content
+        full_content = raw_content if raw_content else content
+        
+        items.append(
+            {
+                "title": entry.get("title", ""),
+                "url": entry.get("url", ""),
+                "summary": content,  # Keep summary as the snippet
+                "full_content": full_content,  # Full content for LLM extraction
+                "raw_content": raw_content,  # Explicitly include raw_content if available
+            }
+        )
+    return items
 
 
 class MarketingBriefBuilder:
@@ -306,18 +351,52 @@ def build_marketing_assets(request: MarketingRequest) -> Dict[str, Any]:
     # Get brand domains to exclude from search results using LLM
     brand_domains = get_brand_domains(request.brand, llm)
     
-    tavily_client = TavilyClient(api_key=tavily_api_key)
-    brand_research = tavily_client.search(
-        query=f"{request.brand} brand voice, marketing positioning, product heroes, logo usage, partnership history",
+    # Get country for geographic filtering
+    country = get_country_from_city(request.city)
+    
+    # Use TavilySearch from langchain-tavily with optimized parameters for brand research
+    brand_search = TavilySearch(
+        tavily_api_key=tavily_api_key,
+        search_depth="advanced",  # Advanced search for better relevance (2 credits)
         max_results=6,
         exclude_domains=brand_domains,
+        include_answer="advanced",  # Use advanced answer for more detailed insights
+        include_raw_content="markdown",  # Get full page content in markdown format
+        chunks_per_source=3,  # Maximum chunks per source for comprehensive content
     )
-    events_raw = tavily_client.search(
-        query=f"upcoming events in {request.city} with dates, times, and locations suitable for {request.brand} partnerships or collaborations. Include specific event details like event date, start time, venue address, and location.",
-        max_results=max(request.num_events * 2, 6),
-        exclude_domains=brand_domains,
+    brand_research_result = brand_search.invoke(
+        f"{request.brand} brand voice, marketing positioning, product heroes, logo usage, partnership history"
     )
-    events = tavily_client.normalize_results(events_raw, limit=request.num_events)
+    # TavilySearch returns a dict with 'results' and 'answer' keys
+    brand_research = {
+        "query": f"{request.brand} brand voice, marketing positioning, product heroes, logo usage, partnership history",
+        "results": brand_research_result.get("results", []) if isinstance(brand_research_result, dict) else [],
+        "answer": brand_research_result.get("answer", "") if isinstance(brand_research_result, dict) else "",
+    }
+    
+    # Configure event search with optimized parameters for finding upcoming events
+    events_search_params = {
+        "tavily_api_key": tavily_api_key,
+        "search_depth": "advanced",  # Advanced search for better event discovery (2 credits)
+        "max_results": max(request.num_events * 2, 6),
+        "exclude_domains": brand_domains,
+        "include_answer": "advanced",  # Advanced answer for better event summaries
+        "include_raw_content": "markdown",  # Full page content for extracting dates/times/locations
+        "chunks_per_source": 3,  # Maximum chunks for comprehensive event details
+        "time_range": "month",  # Focus on events in the next month
+    }
+    
+    # Add country filter if we can map the city to a country
+    if country:
+        events_search_params["country"] = country
+    
+    events_search = TavilySearch(**events_search_params)
+    events_result = events_search.invoke(
+        f"upcoming events in {request.city} with dates, times, and locations suitable for {request.brand} partnerships or collaborations. Include specific event details like event date, start time, venue address, and location."
+    )
+    # Extract results list from TavilySearch response
+    events_raw = events_result.get("results", []) if isinstance(events_result, dict) else []
+    events = normalize_tavily_results(events_raw, limit=request.num_events)
 
     # Reuse the same LLM instance for brief building
     brief_builder = MarketingBriefBuilder(llm)
